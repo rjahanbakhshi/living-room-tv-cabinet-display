@@ -1,0 +1,10 @@
+---
+CompileFlags:
+  Add:
+    - -std=c++17
+    - -x
+    - c++
+    - -I/home/reza/proj/livingroom-tv-cabinet-display/.esphome/build/livingroom-tv-cabinet-display/src
+    - -Ilambdas
+    - -include
+    - esphome_stubs.h

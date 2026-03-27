@@ -1,0 +1,200 @@
+esphome:
+  name: livingroom-tv-cabinet-display
+  includes:
+    - lambdas/display.h
+    - lambdas/touch_handlers.h
+  on_boot:
+    priority: 800  # runs before component setup — powers the FT3168 touch IC
+    then:
+      - lambda: |-
+          gpio_set_direction((gpio_num_t)42, GPIO_MODE_OUTPUT);
+          gpio_set_level((gpio_num_t)42, 1);
+
+external_components:
+  - source: components
+    components: [ft5x06]
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+
+api:
+  encryption:
+    key: "LvM6aU9YTDtFRYkFmlrzfFp39eRG72LnDe+DmfKxpYQ="
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: "RJ-IOT"
+  password: "Hi, IOT kheili khatarnake."
+  ap:
+    ssid: "Livingroom-Tv-Cabinet-Display"
+    password: "VuF4e0VjP7Z0"
+
+captive_portal:
+
+globals:
+  # Eased display volume — lags behind actual volume for smooth bar animation
+  - id: display_vol
+    type: float
+    initial_value: '0.0'
+  # Tracks previous receiver state so we can restart animation on power-on
+  - id: was_receiver_on
+    type: bool
+    initial_value: 'false'
+  # Touch gesture state
+  - id: pending_volume
+    type: float
+    initial_value: '0.0'
+  - id: touch_zone
+    type: int        # 0=none  1=ring  2=center  3=bottom-swipe
+    initial_value: '0'
+  - id: force_clock
+    type: bool       # user forced clock face while AVR is on
+    initial_value: 'false'
+  - id: touch_last_y
+    type: int
+    initial_value: '0'
+  - id: touch_start_x
+    type: int
+    initial_value: '0'
+  - id: touch_start_y
+    type: int
+    initial_value: '0'
+  - id: touch_moved
+    type: bool
+    initial_value: 'false'
+  - id: touch_prev_angle
+    type: float
+    initial_value: '0.0'
+  - id: center_swipe_accum
+    type: float
+    initial_value: '0.0'
+  - id: touch_prev_y
+    type: int
+    initial_value: '0'
+
+script:
+  # Toggles mute on the receiver (HA evaluates the template itself)
+  - id: toggle_mute
+    mode: single
+    then:
+      - homeassistant.service:
+          service: media_player.volume_mute
+          data:
+            entity_id: media_player.tx_rz30
+          data_template:
+            is_volume_muted: '{{ not is_state_attr("media_player.tx_rz30", "is_volume_muted", true) }}'
+  # Sends pending_volume to the receiver via HA service
+  - id: send_volume
+    mode: restart
+    then:
+      - lambda: 'ESP_LOGI("vol", "SEND: calling HA service with vol=%.4f", id(pending_volume));'
+      - homeassistant.service:
+          service: media_player.volume_set
+          data:
+            entity_id: media_player.tx_rz30
+          variables:
+            vol: !lambda 'return str_sprintf("%.4f", id(pending_volume));'
+          data_template:
+            volume_level: '{{ vol }}'
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+sensor:
+  - platform: homeassistant
+    id: receiver_volume
+    entity_id: media_player.tx_rz30
+    attribute: volume_level
+text_sensor:
+  - platform: homeassistant
+    id: receiver_state
+    entity_id: media_player.tx_rz30
+    on_value:
+      then:
+        - lambda: |-
+            bool receiver_on = id(receiver_state).has_state() &&
+                               id(receiver_state).state != "off" &&
+                               id(receiver_state).state != "unavailable" &&
+                               id(receiver_state).state != "unknown";
+            if (receiver_on) id(force_clock) = false;
+  - platform: homeassistant
+    id: receiver_muted
+    entity_id: media_player.tx_rz30
+    attribute: is_volume_muted
+    on_value:
+      then:
+        - lambda: 'ESP_LOGD("vol", "muted state: %s", id(receiver_muted).state.c_str());'
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_vol
+    size: 150
+    glyphs: "0123456789 "
+  - file: "gfonts://Roboto"
+    id: font_label
+    size: 22
+    glyphs: "VOLUME"
+  - file: "gfonts://Roboto"
+    id: font_date
+    size: 26
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ,."
+
+i2c:
+  id: i2c_sys
+  sda: GPIO47
+  scl: GPIO48
+  frequency: 400kHz
+  scan: false
+
+touchscreen:
+  - platform: ft5x06
+    id: touch_panel
+    i2c_id: i2c_sys
+    address: 0x38
+    display: display_main
+    update_interval: 16ms
+    on_touch:
+      - lambda: 'touch_handlers::on_touch(touch, touches);'
+    on_update:
+      - lambda: 'touch_handlers::on_update(touches);'
+    on_release:
+      - lambda: 'touch_handlers::on_release();'
+
+spi:
+  - id: qspi_bus
+    type: quad
+    clk_pin: GPIO10
+    data_pins:
+      - GPIO11  # D0 / SIO0
+      - GPIO12  # D1 / SIO1
+      - GPIO13  # D2 / SIO2
+      - GPIO14  # D3 / SIO3
+
+display:
+  - platform: mipi_spi
+    id: display_main
+    model: CO5300
+    spi_id: qspi_bus
+    cs_pin: GPIO9
+    reset_pin: GPIO21
+    rotation: 90
+    dimensions:
+      height: 466
+      width: 466
+      offset_width: 6
+    transform: disabled
+    update_interval: 100ms
+    lambda: 'display_face::render(it);'

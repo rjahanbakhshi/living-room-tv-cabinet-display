@@ -1,0 +1,13 @@
+# ESPHome build artifacts and secrets
+/.esphome/
+/secrets.yaml
+
+# Environment variables (may contain tokens)
+.envrc
+
+# Claude Code local settings (machine-specific)
+.claude/
+
+# Python bytecode
+__pycache__/
+*.pyc
